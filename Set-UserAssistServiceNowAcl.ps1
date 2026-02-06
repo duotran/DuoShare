@@ -9,9 +9,15 @@ $ServiceNowAccount = 'servicenow'
 $root = "C:\ProgramData\UserAssistACL" # Kan ändra path om kund önskar
 $BackupDir = Join-Path $Root 'Logs'
 $LogFile = Join-Path $BackupDir 'UserAssistAcl.log'
+$BackupRoot = Join-Path $Root 'Backups'
+
 
 if (-not (Test-Path $BackupDir)) {
     New-Item -Path $BackupDir -ItemType Directory -Force | Out-Null
+}
+
+if (-not (Test-Path $BackupRoot)) {
+    New-Item -Path $BackupRoot -ItemType Directory -Force | Out-Null
 }
 
 function Write-Log {
@@ -30,6 +36,33 @@ function Write-Log {
 
 Write-Log "Remediation started."
 
+function Backup-UserAssistKey {
+    param (
+        [string]$RegPath,
+        [string]$Sid
+    )
+
+    try {
+        $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $BackupPath = Join-Path $BackupRoot "$Sid-$Timestamp"
+
+        if (-not (Test-Path $BackupPath)) {
+            New-Item -Path $BackupPath -ItemType Directory -Force | Out-Null
+        }
+
+        reg.exe export "$RegPath" (Join-Path $BackupPath 'UserAssist.reg') /y | Out-Null
+
+        Get-Acl "Registry::$RegPath" |
+        Format-List * |
+        Out-File (Join-Path $BackupPath 'UserAssist_ACL.txt') -Encoding UTF8
+
+        Write-Log "Backup created for $Sid"
+    }
+    catch {
+        Write-Log "Backup failed for $Sid : $_" 'ERROR'
+        throw
+    }
+}
 
 
 # Resolve ServiceNow SID
@@ -58,7 +91,9 @@ catch {
 
 foreach ($Sid in $UserSids) {
 
-    $UserAssistPath = "Registry::HKEY_USERS\$($Sid.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+    $RegPath = "HKEY_USERS\$($Sid.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+    $UserAssistPath = "Registry::$RegPath" 
+    
 
     if (-not (Test-Path $UserAssistPath)) {
         Write-Log "UserAssist missing for $($Sid.PSChildName)."
@@ -66,6 +101,7 @@ foreach ($Sid in $UserSids) {
     }
 
     try {
+        Backup-UserAssistKey -RegPath $RegPath -Sid $Sid
         $Acl = Get-Acl $UserAssistPath
     }
     catch {
@@ -75,8 +111,11 @@ foreach ($Sid in $UserSids) {
 
     $AlreadyPresent = $false
 
-    foreach ($Ace in $Acl.Access) {
-      
+    foreach ($Ace in $Acl.Access) { 
+        $AceSid = $Ace.IdentityReference.Translate(
+            [System.Security.Principal.SecurityIdentifier]
+        ).Value
+
         if ($AceSid -eq $ServiceNowSid -and
             ($Ace.RegistryRights -band [System.Security.AccessControl.RegistryRights]::ReadKey)) {
             $AlreadyPresent = $true
