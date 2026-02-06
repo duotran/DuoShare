@@ -83,7 +83,7 @@ foreach ($Sid in $UserSids) {
             Translate([System.Security.Principal.SecurityIdentifier]).Value
         }
         catch {
-            #Write-Log "Failed to translate ACE identity on $UserAssistPath" 'INFO'
+          
             continue
         }
 

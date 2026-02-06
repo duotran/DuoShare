@@ -1,6 +1,9 @@
 # ==============================
 # Set-UserAssistServiceNowAcl.ps1
 # ==============================
+param (
+    [switch]$Restore
+)
 
 $ErrorActionPreference = 'Stop'
 $ServiceNowAccount = 'servicenow'
@@ -34,7 +37,13 @@ function Write-Log {
     catch {}
 }
 
-Write-Log "Remediation started."
+if ($Restore) {
+    Write-Log "Restore started"
+}
+else {
+    Write-Log "Remediation started."
+}
+
 
 function Backup-UserAssistKey {
     param (
@@ -43,7 +52,7 @@ function Backup-UserAssistKey {
     )
 
     try {
-        $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $Timestamp = Get-Date -Format "yyyyMMdd"
         $BackupPath = Join-Path $BackupRoot "$Sid-$Timestamp"
 
         if (-not (Test-Path $BackupPath)) {
@@ -61,6 +70,47 @@ function Backup-UserAssistKey {
     catch {
         Write-Log "Backup failed for $Sid : $_" 'ERROR'
         throw
+    }
+}
+
+function Remove-ServiceNowAcl {
+    param (
+        [string]$UserAssistPath
+    )
+
+    try {
+        $Acl = Get-Acl $UserAssistPath
+        $Removed = $false
+
+        foreach ($Ace in $Acl.Access) {
+
+            try {
+                $AceSid = $Ace.IdentityReference.Translate(
+                    [System.Security.Principal.SecurityIdentifier]
+                ).Value
+            }
+            catch {
+                continue
+            }
+
+            if ($AceSid -eq $ServiceNowSid -and
+                ($Ace.RegistryRights -band [System.Security.AccessControl.RegistryRights]::ReadKey)) {
+
+                $Acl.RemoveAccessRule($Ace)
+                $Removed = $true
+            }
+        }
+
+        if ($Removed) {
+            Set-Acl -Path $UserAssistPath -AclObject $Acl
+            Write-Log "Removed ServiceNow ReadKey from $UserAssistPath" 'CHANGE'
+        }
+        else {
+            Write-Log "No ServiceNow ReadKey found on $UserAssistPath"
+        }
+    }
+    catch {
+        Write-Log "Failed to remove ServiceNow ACL on $UserAssistPath : $_" 'ERROR'
     }
 }
 
@@ -94,6 +144,11 @@ foreach ($Sid in $UserSids) {
     $RegPath = "HKEY_USERS\$($Sid.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
     $UserAssistPath = "Registry::$RegPath" 
     
+    if ($Restore) {       
+        Remove-ServiceNowAcl -UserAssistPath $UserAssistPath
+        continue
+    }
+
 
     if (-not (Test-Path $UserAssistPath)) {
         Write-Log "UserAssist missing for $($Sid.PSChildName)."
@@ -101,7 +156,7 @@ foreach ($Sid in $UserSids) {
     }
 
     try {
-        Backup-UserAssistKey -RegPath $RegPath -Sid $Sid
+        Backup-UserAssistKey -RegPath $RegPath -Sid $Sid.PSChildName
         $Acl = Get-Acl $UserAssistPath
     }
     catch {
@@ -112,9 +167,14 @@ foreach ($Sid in $UserSids) {
     $AlreadyPresent = $false
 
     foreach ($Ace in $Acl.Access) { 
-        $AceSid = $Ace.IdentityReference.Translate(
-            [System.Security.Principal.SecurityIdentifier]
-        ).Value
+        try {
+            $AceSid = $Ace.IdentityReference.Translate(
+                [System.Security.Principal.SecurityIdentifier]
+            ).Value
+        }
+        catch {
+            continue
+        }
 
         if ($AceSid -eq $ServiceNowSid -and
             ($Ace.RegistryRights -band [System.Security.AccessControl.RegistryRights]::ReadKey)) {
@@ -147,6 +207,10 @@ foreach ($Sid in $UserSids) {
     }
 
 }
-
-Write-Log "Remediation completed."
+if ($Restore) {
+    Write-Log "Restore completed."
+}
+else {
+    Write-Log "Remediation completed."
+}
 exit 0
