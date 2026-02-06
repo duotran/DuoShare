@@ -17,14 +17,15 @@ if (-not (Test-Path $BackupDir)) {
 function Write-Log {
     param (
         [string]$Message,
-        [ValidateSet('INFO','CHANGE','ERROR')]
+        [ValidateSet('INFO', 'CHANGE', 'ERROR')]
         [string]$Level = 'INFO'
     )
 
     try {
         $Time = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
         Add-Content -Path $LogFile -Value "$Time [$Level] $Message"
-    } catch {}
+    }
+    catch {}
 }
 
 Write-Log "Detection started."
@@ -32,7 +33,7 @@ Write-Log "Detection started."
 # Resolve ServiceNow SID
 try {
     $ServiceNowSid = (New-Object System.Security.Principal.NTAccount($ServiceNowAccount)).
-        Translate([System.Security.Principal.SecurityIdentifier]).Value
+    Translate([System.Security.Principal.SecurityIdentifier]).Value
     Write-Log "Resolved ServiceNow SID: $ServiceNowSid"
 }
 catch {
@@ -76,13 +77,25 @@ foreach ($Sid in $UserSids) {
     $HasRead = $false
 
     foreach ($Ace in $Acl.Access) {
-      
-        if ($AceSid -eq $ServiceNowSid -and
-            ($Ace.RegistryRights -band [System.Security.AccessControl.RegistryRights]::ReadKey)) {
+
+        try {
+            $AceSid = $Ace.IdentityReference.
+            Translate([System.Security.Principal.SecurityIdentifier]).Value
+        }
+        catch {
+            #Write-Log "Failed to translate ACE identity on $UserAssistPath" 'INFO'
+            continue
+        }
+
+        if (
+            $AceSid -eq $ServiceNowSid -and
+            ($Ace.RegistryRights -band [System.Security.AccessControl.RegistryRights]::ReadKey)
+        ) {
             $HasRead = $true
             break
         }
     }
+
 
     if (-not $HasRead) {
         Write-Log "Missing ReadKey permission on $UserAssistPath" 'INFO'
